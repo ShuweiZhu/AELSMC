@@ -1,0 +1,89 @@
+clear
+clc
+
+addpath(genpath(pwd))
+
+% please download the dataset first: https://pan.baidu.com/s/1JlnKE5ER9lsfqWBgL6fVog
+
+%% Load dataset
+for DD=1
+    % BIC; COAD; GBM; KRCCC; LSCC;
+    % The OptimalClusterNum can be set as other values
+    [OptimalClusterNum, DataName, Data]=InputData(DD);
+    load(Data)
+
+    [Data1] = ProgressData(Gene);
+    [Data2] = ProgressData(Methy);
+    [Data3] = ProgressData(Mirna);
+
+
+    rate=0.1; % rate=[0.01,0.02,0.03,0.04,0.05,0.06,0.07,0.08,0.09,0.1]
+    startTimer=tic;
+    Gene_array=table2array(Gene);
+    autoenco_Gene = trainAutoencoder (Gene_array, fix(rate*length(Gene_array)),'MaxEpochs', 50);
+    Data1_R = encode(autoenco_Gene, Gene_array);
+    % Data1_R = Data1';
+
+    Methy_array=table2array(Methy);
+    autoenco_Methy = trainAutoencoder (Methy_array, fix(rate*length(Methy_array)),'MaxEpochs', 50);
+    Data2_R = encode(autoenco_Methy, Methy_array);
+    % Data2_R = Data2';
+
+    Mirna_array=table2array(Mirna);
+    autoenco_Mirna = trainAutoencoder (Mirna_array, fix(0.1*length(Mirna_array)),'MaxEpochs', 50);
+    Data3_R = encode(autoenco_Mirna, Mirna_array);
+    % Data3_R = Data3';
+
+    % X_0 = [Data1  Data2  Data3];
+    X_0 = [Data1_R'  Data2_R'  Data3_R'];
+    y = table2array(Response(:,2:end));
+    %y(:,1) = center(y(:,1));
+    X = [y X_0];
+
+    ViewNum(1) = size(Data1_R',2);
+    ViewNum(2) = size(Data2_R',2);
+    ViewNum(3) = size(Data3_R',2);
+
+    ViewIdx{1} = 1:ViewNum(1);
+    ViewIdx{2} = (ViewNum(1)+1) : (ViewNum(1)+ViewNum(2));
+    ViewIdx{3} = (ViewNum(1)+ViewNum(2)+1) : (ViewNum(1)+ViewNum(2)+ViewNum(3));
+
+    X = Cox_data_processed( X(:,3:end),X(:,1),'censoring',~X(:,2) );
+
+    lambda = 1;
+    rho = 0.1;
+    tau = 10;
+    [wm, funcValMv,G] = S2GC(X, lambda, rho, tau, ViewIdx);
+
+    Kmax=10;
+    Clust=zeros(Kmax-1,size(Data1,1));
+    for K=2:Kmax
+        idx = SpectralClustering(double(G),K);
+        Clust(K-1,:)=idx';
+    end
+
+    %%% Get all clusters in the ensemble
+    [bcs, baseClsSegs] = getAllSegs(Clust');
+    %%% Compute ECI
+    disp('Compute ECI ... ');
+    tic;
+    para_theta = 0.4; % Parameter
+    ECI = computeECI(bcs, baseClsSegs, para_theta);
+    toc;
+    %%% Perform LWGP
+    disp('Run the LWGP algorithm ... ');
+    tic;
+    resultsLWGP = runLWGP(bcs, baseClsSegs, ECI, OptimalClusterNum);
+    toc;
+    disp('--------------------------------------------------------------');
+
+    group = num2str(resultsLWGP);
+    group = num2cell(group);
+    [p,fh,stats]=MatSurv(X.sorty,~X.cens,group);
+
+    overallTime = toc(startTimer);
+
+end
+
+rmpath(genpath(cd));
+
